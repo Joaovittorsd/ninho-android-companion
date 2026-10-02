@@ -102,10 +102,19 @@ def signature_checksum_from_keystore(keystore_path: Path, alias: str, storepass:
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
 
     if result.returncode != 0:
-        raise SystemExit(f"keytool failed (check keystore path/alias/password):\n{result.stderr}")
+        raise SystemExit(
+            f"keytool failed (exit code {result.returncode}).\n"
+            f"keytool used: {keytool}\n"
+            f"keystore: {keystore_path}\n"
+            f"alias: {alias}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}\n"
+        )
 
     for line in result.stdout.splitlines():
         line = line.strip()
