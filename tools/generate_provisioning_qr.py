@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """
 Generates the Device Owner QR-code provisioning payload (JSON) and the QR
-image itself, from a signed APK, per Apendice A of
+image itself, from a signed APK + its keystore, per Apendice A of
 docs/android/DESIGN-ninho-android-companion.md.
 
 Usage:
-    python generate_provisioning_qr.py <path-to-signed-apk> <public-https-download-url> [--wifi-ssid SSID --wifi-password PASS]
+    python generate_provisioning_qr.py <path-to-signed-apk> <public-https-download-url> \
+        --keystore <path-to-.jks> --alias <key-alias> \
+        [--storepass PASSWORD] [--wifi-ssid SSID --wifi-password PASS]
+
+If --storepass is omitted, you'll be prompted for it (not echoed to the
+terminal via getpass, though note keytool itself may echo it if console
+redirection prevents masked input — still never passed as a bare CLI arg,
+so it won't land in shell history or process listings).
 
 Computes:
   - PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM: SHA-256 of the APK file bytes,
-    base64-encoded (the format Android's provisioning parser expects today).
-  - PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM: SHA-256 of the APK signing
-    certificate, base64-encoded.
+    base64-encoded.
+  - PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM: SHA-256 of the signing
+    certificate, read directly from the keystore via `keytool`, base64-encoded.
+    This works regardless of whether the APK uses v1/v2/v3 signing (modern
+    Android Studio builds commonly skip v1/jar signing, which is why parsing
+    META-INF directly from the APK doesn't work — reading the cert from the
+    keystore that signed it sidesteps that entirely).
 
 IMPORTANT: checksum format has changed across Android versions in the past
 (SHA-1 is deprecated; some OEM/AOSP versions have been picky about
@@ -20,13 +31,17 @@ checksum mismatch on the real test device, this is the first thing to
 re-verify against the current Android Enterprise documentation for your
 exact target Android version — don't assume this script is immutably correct.
 """
+from __future__ import annotations
+
 import argparse
 import base64
+import getpass
 import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 PACKAGE_NAME = "com.ninho.companion"
@@ -42,45 +57,76 @@ def apk_package_checksum(apk_path: Path) -> str:
     return sha256_b64(apk_path.read_bytes())
 
 
-def apk_signature_checksum(apk_path: Path) -> str:
-    """
-    Extracts the signing certificate from the APK's META-INF/*.RSA (or .DSA/.EC)
-    file and hashes it. Requires the APK to be signed (v1/jar signing present
-    in META-INF) — most Android Studio release builds include this alongside
-    v2/v3 signing.
-    """
-    with zipfile.ZipFile(apk_path) as z:
-        cert_entries = [
-            n for n in z.namelist()
-            if n.startswith("META-INF/") and n.upper().endswith((".RSA", ".DSA", ".EC"))
-        ]
-        if not cert_entries:
-            raise SystemExit(
-                "No META-INF/*.RSA|DSA|EC certificate file found in the APK.\n"
-                "This script needs v1 (jar) signing present to extract the cert directly.\n"
-                "If your build only has v2/v3 signing, extract the cert with:\n"
-                "  apksigner verify --print-certs <apk>\n"
-                "and hash the certificate's DER bytes with SHA-256 + urlsafe-base64 manually."
-            )
-        cert_bytes = z.read(cert_entries[0])
-        # The .RSA/.DSA/.EC file is a PKCS#7 SignedData blob, not the bare cert —
-        # for a quick spike this is commonly accepted as-is by some provisioning
-        # flows, but the canonical approach is extracting just the X.509 cert DER.
-        # Flag this clearly rather than silently producing a wrong checksum:
-        print(
-            "WARNING: hashing the raw META-INF signature block, not the extracted "
-            "X.509 certificate DER. Verify this matches what your target Android "
-            "version expects (see docstring) before relying on it for a real "
-            "provisioning test.",
-            file=sys.stderr,
-        )
-        return sha256_b64(cert_bytes)
+def find_keytool() -> str:
+    found = shutil.which("keytool")
+    if found:
+        return found
+
+    candidates = [
+        Path(r"C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe"),
+        Path(r"C:\Program Files\Android\Android Studio1.1\jbr\bin\keytool.exe"),
+    ]
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        candidates.append(Path(java_home) / "bin" / "keytool.exe")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    raise SystemExit(
+        "keytool not found on PATH or in common Android Studio locations.\n"
+        "It ships with the JBR (JetBrains Runtime) bundled inside Android Studio.\n"
+        "Either add this to your PATH and retry:\n"
+        r'  C:\Program Files\Android\Android Studio\jbr\bin' + "\n"
+        "...or pass its full path via the KEYTOOL_PATH environment variable."
+    )
+
+
+def signature_checksum_from_keystore(keystore_path: Path, alias: str, storepass: str | None) -> str:
+    keytool = os.environ.get("KEYTOOL_PATH") or find_keytool()
+
+    if storepass is None:
+        storepass = getpass.getpass(f"Keystore password for {keystore_path.name}: ")
+
+    env = os.environ.copy()
+    env["NINHO_KS_PASS"] = storepass
+
+    result = subprocess.run(
+        [
+            keytool, "-list", "-v",
+            "-keystore", str(keystore_path),
+            "-alias", alias,
+            "-storepass:env", "NINHO_KS_PASS",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode != 0:
+        raise SystemExit(f"keytool failed (check keystore path/alias/password):\n{result.stderr}")
+
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("SHA256:"):
+            hex_fingerprint = line.split("SHA256:", 1)[1].strip().replace(":", "")
+            digest = bytes.fromhex(hex_fingerprint)
+            return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+
+    raise SystemExit(
+        "Could not find a 'SHA256:' fingerprint line in keytool output. "
+        "Full output below for debugging:\n" + result.stdout
+    )
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("apk_path", type=Path)
     parser.add_argument("download_url")
+    parser.add_argument("--keystore", required=True, type=Path)
+    parser.add_argument("--alias", required=True)
+    parser.add_argument("--storepass", default=None, help="Omit to be prompted instead (recommended).")
     parser.add_argument("--wifi-ssid", default=None)
     parser.add_argument("--wifi-password", default=None)
     parser.add_argument("--out-json", default="provisioning_payload.json")
@@ -89,10 +135,14 @@ def main():
 
     if not args.apk_path.exists():
         raise SystemExit(f"APK not found: {args.apk_path}")
+    if not args.keystore.exists():
+        raise SystemExit(f"Keystore not found: {args.keystore}")
 
     payload = {
         "android.app.extra.PROVISIONING_DEVICE_ADMIN_COMPONENT_NAME": ADMIN_RECEIVER,
-        "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": apk_signature_checksum(args.apk_path),
+        "android.app.extra.PROVISIONING_DEVICE_ADMIN_SIGNATURE_CHECKSUM": signature_checksum_from_keystore(
+            args.keystore, args.alias, args.storepass
+        ),
         "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_DOWNLOAD_LOCATION": args.download_url,
         "android.app.extra.PROVISIONING_DEVICE_ADMIN_PACKAGE_CHECKSUM": apk_package_checksum(args.apk_path),
         "android.app.extra.PROVISIONING_SKIP_ENCRYPTION": False,
