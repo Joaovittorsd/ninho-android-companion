@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Ninho Companion (spike)</string>
+    <string name="status_is_device_owner">✅ Device Owner ativo</string>
+    <string name="status_not_device_owner">❌ Não é Device Owner</string>
+</resources>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Device Owner gets its broad control (addUserRestriction, setPermissionGrantState,
+  etc.) independent of this list once provisioned — this just declares the
+  Device Administrator policy set the receiver is allowed to use. Kept to the
+  set the design doc's deviceadmin module actually needs; expand if a later
+  module needs an additional policy.
+-->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <force-lock />
+        <wipe-data />
+        <disable-keyguard-features />
+    </uses-policies>
+</device-admin>
