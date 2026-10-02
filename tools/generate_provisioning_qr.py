@@ -94,7 +94,13 @@ def signature_checksum_from_keystore(keystore_path: Path, alias: str, storepass:
 
     result = subprocess.run(
         [
-            keytool, "-list", "-v",
+            keytool,
+            # Works around a JDK keytool bug (MissingFormatArgumentException:
+            # Format specifier '%2$s') that crashes `-list -v` when the OS
+            # locale isn't English — forcing English here only affects the
+            # human-readable output formatting, not the certificate data.
+            "-J-Duser.language=en", "-J-Duser.country=US",
+            "-list", "-v",
             "-keystore", str(keystore_path),
             "-alias", alias,
             "-storepass:env", "NINHO_KS_PASS",
