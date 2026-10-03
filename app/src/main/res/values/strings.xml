@@ -1,5 +1,17 @@
 <resources>
     <string name="app_name">Ninho Companion (spike)</string>
-    <string name="status_is_device_owner">✅ Device Owner ativo</string>
-    <string name="status_not_device_owner">❌ Não é Device Owner</string>
+
+    <string name="status_summary">Modo: %1$s\nAdmin/Owner ativo: %2$s\nOverlay concedido: %3$s</string>
+    <string name="status_yes">sim</string>
+    <string name="status_no">não</string>
+
+    <string name="btn_device_admin">Ativar Device Admin (Modo B)</string>
+    <string name="btn_accessibility">Ativar Accessibility Service</string>
+    <string name="btn_overlay">Conceder permissão de overlay</string>
+
+    <string name="device_admin_explanation">O Ninho precisa de acesso de administrador do dispositivo para funcionar como companion de supervisão.</string>
+    <string name="device_admin_disable_warning">Desativar isso vai interromper a supervisão do Ninho neste aparelho.</string>
+
+    <string name="accessibility_service_description">Usado apenas para detectar qual aplicativo está em primeiro plano, para o bloqueio de apps do Ninho. Não lê conteúdo de tela nem digitação.</string>
+    <string name="block_overlay_message">%1$s está bloqueado pelo Ninho</string>
 </resources>
